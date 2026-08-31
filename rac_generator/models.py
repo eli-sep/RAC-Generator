@@ -15,6 +15,8 @@ class ProjectDefaults:
     equipment_definition: str = ""
     network_type: str = "MSTP"  # MSTP or IP
     generate_instance: bool = True
+    fqr_mode: str = "Device Name (SCT recommended)"
+    existing_equipment: str = ""
     dhcp_enabled: bool = True
     subnet_mask: str = ""
     ip_router: str = ""
@@ -64,7 +66,6 @@ class DeviceRecord:
     equipment_definition: str = ""
     controller_template: str = ""
 
-    # Engineering/reference fields from the scratchpad.
     mechanical_drawing: str = ""
     jci_ctrl_dwg_no: str = ""
     sensor_code_no: str = ""
@@ -79,5 +80,4 @@ class DeviceRecord:
     htg_minflow: Optional[float] = None
     comments: str = ""
 
-    # Future/dynamic parameter support.
     parameters: dict[str, object] = field(default_factory=dict)
