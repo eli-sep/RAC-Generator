@@ -1,44 +1,128 @@
-# RAC Generator v0.1
+# RAC Generator v0.2
 
-A first working Python/Tkinter version of the RAC Generator based on the supplied **RAC Schedule Template**.
+Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedule Template** and reviewed against the SCT Release 18 Rapid Archive workflow.
 
 ## What this version does
 
 - Generates equipment groups such as `VAV-01` through `VAV-20`.
 - Supports custom equipment prefix, separator, start/end numbers, and digit padding.
-- Generates a device name using a configurable device prefix (for example `MR-VAV-01`).
-- Supports MSTP or IP controller numbering.
-- Reproduces the BACnet Instance convention found in the supplied `New Empty Scratchpad`.
-- Reproduces the FQR convention found in the supplied workbook.
-- Reads the VAV manufacturer Area / K Factor database directly from the workbook's `Manufacturer` sheet.
-- Infers Box Heat / Supplemental Heat from the VAV controller template convention in the workbook.
-- Supports the five Single-Duct VAV RAC parameters currently used by the scratchpad:
+- Generates device names from a configurable device prefix.
+- Supports MS/TP or IP controller numbering.
+- Supports either deterministic BACnet Instances or leaving Instance blank for SCT.
+- Treats FQR separately from BACnet Instance:
+  - **Device Name (SCT recommended)** is the default FQR mode.
+  - the original custom workbook FQR convention remains optional.
+- Reads VAV manufacturer Area / K Factor data from the workbook's `Manufacturer` sheet.
+- Supports the five current Single-Duct VAV RAC parameters:
   - `SA-AREA` / `AV3111`
   - `SA-KFACTOR` / `AV3112`
   - `CLG-MAXFLOW` / `AV3108`
   - `CLGOCC-MINFLOW` / `AV3109`
   - `HTGOCC-MINFLOW` / `AV3110`
-- Provides an editable device table. Double-click a supported cell to edit it.
-- Exports:
-  - a copy of the supplied RAC `.xlsx` template with the `Rapid Archive Schedule` filled in;
-  - a `Generated Scratchpad` sheet containing the richer engineering data;
-  - an SCT Rapid Archive `.csv` containing the six RAC header rows and generated devices.
-- Warns about duplicate Equipment Names, Device Names, FQRs, and Instances.
+- Lets the user specify equipment that **already exists in SCT** so `Served By` references can be validated correctly.
+- Builds a dependency graph from `Served By Equipment Name` and automatically calculates the required top-down SCT import order.
+- Detects circular `Served By` relationships and unresolved serving equipment.
+- Performs SCT preflight validation for required fields, FQRs, parent relationships, BACnet Instance range, MS/TP MAC range, duplicates, and duplicate MS/TP addresses on the same engine/trunk.
+- Exports a master RAC workbook that includes:
+  - `SCT Setup Guide`
+  - `SCT Import Plan`
+  - populated `Rapid Archive Schedule`
+  - `Generated Scratchpad`
+- Exports **staged SCT Rapid Archive CSV files** such as:
+  - `SCT_01_Level_0.csv`
+  - `SCT_02_Level_1.csv`
+  - `SCT_03_Level_2.csv`
 
-## Important v0.1 limitations
+## Why staged files matter
 
-This is deliberately a first usable build, not the final app.
+SCT Rapid Archive requires serving equipment to exist before its child equipment is created. Johnson Controls recommends a top-down device hierarchy and separate Rapid Archive schedules by hierarchy level.
 
-- The dynamic parameter engine currently implements the **Single-Duct VAV** parameter set used by `New Empty Scratchpad`.
-- The original `New Empty Scratchpad` sheet is left untouched. The app creates `Generated Scratchpad` so the reference sheet/formulas are not destroyed.
-- Room number and Leaf Space are edited per-device in the Devices tab rather than generated from a naming rule.
-- Static IP address sequencing is not automated yet.
-- Controller Template / Equipment Definition lists are currently free-text, not pulled from a project database.
-- The workbook's deterministic BACnet Instance convention is optional because the workbook's own `Column Descriptions` says SCT can assign an instance automatically.
+Example:
 
-## Run on your Mac
+```text
+Plant
+  ↓
+AHU
+  ↓
+VAV
+```
 
-From the project folder:
+RAC Generator therefore produces an import plan such as:
+
+```text
+1. Import SCT_01_Level_0.csv → Save in Rapid Archive
+2. Import SCT_02_Level_1.csv → Save in Rapid Archive
+3. Import SCT_03_Level_2.csv → Save in Rapid Archive
+```
+
+The user can enter equipment groups in any order; RAC Generator calculates the proper import order.
+
+## What must already exist in SCT
+
+Before importing the generated Rapid Archive files, verify the following in the SCT archive:
+
+1. The **Site / Site Director** exists.
+2. The required **supervisory devices (SNE/NAE/etc.)** exist.
+3. The required **integration trunks** exist. `Engine Name` and `Trunk Name` in RAC must match SCT exactly.
+4. Required **Equipment Definitions** exist or are imported.
+5. Required **Controller Templates** exist under `Configuration > SCT Controller Templates`.
+6. Each Controller Template has the correct **Definition Link** to its Equipment Definition.
+7. Any serving equipment not generated by this project already exists in SCT and is listed in the app's **Equipment already in SCT** field.
+
+### Creating an Equipment Definition
+
+SCT Release 18 workflow:
+
+```text
+Facility
+  > Prepare Rapid Archive
+    > Insert Equipment Definition
+```
+
+Choose the Definitions folder, name/configure the definition, and finish the wizard. Johnson Controls recommends creating Equipment Definitions **bottom-up**: terminal units first, then AHUs, then central plant.
+
+### Creating a Controller Template
+
+SCT workflow:
+
+```text
+Insert
+  > Object
+    > Controller Template
+```
+
+Set the destination to:
+
+```text
+Configuration > SCT Controller Templates
+```
+
+Give the template a unique identifier and use the **Definition Link** browse control to link it to the proper Equipment Definition. Points can then be populated from a CAF, an existing controller, or manually.
+
+> **Important:** `Equipment Definition Name` in the RAC schedule is a reference-only field. The functional Equipment Definition relationship used by Rapid Archive comes from the Controller Template's Definition Link.
+
+## SCT import procedure
+
+For each generated hierarchy level:
+
+1. In SCT, open **Facility > Rapid Archive**.
+2. Click **Edit** and **Import**.
+3. Import the next staged CSV file.
+4. Review Supervisory Device, Integration, spaces, addresses, Controller Template, CAF parameters, and Served By relationships.
+5. Click **Save**.
+6. Only after that save completes, import the next hierarchy level.
+
+This order is required so `Served By Equipment Name` can resolve to an equipment object that already exists in the archive.
+
+## Important limitations
+
+- Dynamic CAF parameters currently implement the Single-Duct VAV set used by the supplied scratchpad.
+- Room Number and Leaf Space are edited per-device rather than generated from a naming rule.
+- Static IP address sequencing is not automated yet. IP projects receive a preflight warning to verify DHCP/static IP configuration in SCT.
+- Controller Template / Equipment Definition names are free text; RAC Generator cannot directly query an SCT archive to prove they exist.
+- One-controller-to-multiple-equipment rows are recognized as a possible future/general use case, but the UI is still optimized for the common one-controller/one-equipment VAV workflow.
+
+## Run
 
 ```bash
 python3 -m venv .venv
@@ -47,76 +131,19 @@ pip install -r requirements.txt
 python main.py
 ```
 
-If you already created and activated `.venv`, you only need:
-
-```bash
-pip install -r requirements.txt
-python main.py
-```
-
-## Run the tests
+## Tests
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-## Suggested first test
+## Next improvements
 
-Project & Network:
-
-```text
-Device Prefix:       MR-
-Engine:              S3-SNE03
-Trunk:               FC-1
-Controller Part #:   M4-CVM03050-0
-Controller Template: VAV-RH
-Network:             MSTP
-```
-
-Equipment Group:
-
-```text
-Prefix:       VAV
-Separator:    -
-Start:        1
-End:          5
-Digits:       2
-Starting MAC: 6
-Manufacturer: Titus
-Inlet:        8
-```
-
-The first record should calculate approximately:
-
-```text
-Equipment: VAV-01
-Device:    MR-VAV-01
-MAC:       6
-Instance:  1003106
-FQR:       031CV006
-SA Area:   0.35
-K Factor:  2.39
-```
-
-## Future build ideas
-
-The next releases should add:
-
-1. equipment-specific profiles (AHU, VAV, ERV, etc.);
-2. dynamic parameter sets from `VAV SD Parms`, `VAV DD Parms`, `Heating Valves Parms`, and `Misc Parms`;
+1. equipment-specific profiles (AHU, VAV, ERV, central plant, etc.);
+2. dynamic parameter sets from the additional parameter sheets;
 3. bulk room / leaf-space import and paste-from-Excel;
-4. IP controller network addressing;
-5. saved project files so you can stop and resume later;
-6. better FQR scheme configuration;
-7. validation against required SCT RAC fields;
-8. a Windows standalone `.exe` via PyInstaller.
-
-## Windows executable later
-
-When the app is ready for Windows packaging, PyInstaller can bundle Python and the template into a standalone app. A typical build will be similar to:
-
-```powershell
-pyinstaller --noconsole --onefile --name "RAC Generator" --add-data "resources/RAC Schedule_Template_Updated.xlsx;resources" main.py
-```
-
-The exact packaging command can be finalized after the application features stabilize.
+4. complete static IP sequencing and validation;
+5. saved project files;
+6. project-specific FQR schemes;
+7. explicit multi-equipment-per-controller workflow;
+8. Windows standalone `.exe` packaging.
