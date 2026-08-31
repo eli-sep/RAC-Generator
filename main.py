@@ -1,4 +1,4 @@
-from rac_generator.ui import run_app
+from rac_generator.ui_fixes import run_app
 
 
 if __name__ == "__main__":
