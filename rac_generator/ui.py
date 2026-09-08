@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tkinter as tk
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -10,6 +11,7 @@ from .logic import (
     build_dependency_levels,
     generate_group_records,
     load_manufacturer_data,
+    manufacturer_lookup,
     recalculate_record,
     validate_records_for_sct,
 )
@@ -61,7 +63,9 @@ class RACGeneratorApp(tk.Tk):
             messagebox.showwarning("Template warning", f"Could not load manufacturer data.\n\n{exc}")
 
         self.records: list[DeviceRecord] = []
-        self._editor: tk.Entry | None = None
+        self._editor: ttk.Entry | None = None
+        self._edit_cell: tuple[str, int] | None = None
+        self._finishing_edit = False
         self._build_style()
         self._build_ui()
 
@@ -147,11 +151,16 @@ class RACGeneratorApp(tk.Tk):
             frame, textvariable=self.fqr_mode_var,
             values=["Device Name (SCT recommended)", "Custom workbook convention"], state="readonly"
         ).grid(row=5, column=2, sticky="ew", padx=6, pady=(0, 8))
-        ttk.Checkbutton(frame, text="DHCP Enabled (IP only)", variable=self.dhcp_var).grid(
-            row=5, column=3, sticky="w", padx=6, pady=(0, 8)
-        )
-        self._labeled_entry(frame, "Subnet Mask (IP only)", 6, 0, self.subnet_var)
-        self._labeled_entry(frame, "IP Router (IP only)", 6, 1, self.router_var)
+        self.dhcp_check = ttk.Checkbutton(frame, text="DHCP Enabled", variable=self.dhcp_var)
+        self.dhcp_check.grid(row=5, column=3, sticky="w", padx=6, pady=(0, 8))
+        self.ip_settings_frame = ttk.Frame(frame)
+        self.ip_settings_frame.grid(row=6, column=0, columnspan=4, sticky="ew")
+        for col in range(4):
+            self.ip_settings_frame.columnconfigure(col, weight=1, uniform="ip")
+        self._labeled_entry(self.ip_settings_frame, "Subnet Mask", 0, 0, self.subnet_var)
+        self._labeled_entry(self.ip_settings_frame, "IP Router", 0, 1, self.router_var)
+        self.network_type_var.trace_add("write", self._update_network_fields)
+        self._update_network_fields()
 
         prereq = ttk.LabelFrame(self.project_tab, text="SCT Pre-existing Equipment", style="Section.TLabelframe", padding=10)
         prereq.pack(fill="x", pady=(12, 0))
@@ -173,6 +182,13 @@ class RACGeneratorApp(tk.Tk):
         )
         ttk.Label(self.project_tab, text=note, wraplength=1080, foreground="#555555").pack(anchor="w", pady=(10, 0))
 
+    def _update_network_fields(self, *_args):
+        for widget in (self.dhcp_check, self.ip_settings_frame):
+            if self.network_type_var.get() == "IP":
+                widget.grid()
+            else:
+                widget.grid_remove()
+
     def _build_group_tab(self):
         frame = ttk.LabelFrame(self.group_tab, text="Create an Equipment Group", style="Section.TLabelframe", padding=10)
         frame.pack(fill="x")
@@ -188,6 +204,8 @@ class RACGeneratorApp(tk.Tk):
         self.served_by_var = tk.StringVar()
         self.manufacturer_var = tk.StringVar(value=self._default_manufacturer())
         self.inlet_var = tk.StringVar()
+        self.group_area_var = tk.StringVar()
+        self.group_kfactor_var = tk.StringVar()
         self.maxflow_var = tk.StringVar()
         self.clgmin_var = tk.StringVar()
         self.htgmin_var = tk.StringVar()
@@ -205,10 +223,15 @@ class RACGeneratorApp(tk.Tk):
             frame, textvariable=self.manufacturer_var, values=sorted(self.manufacturer_data.keys()), state="readonly"
         )
         self.manufacturer_combo.grid(row=3, column=2, sticky="ew", padx=6, pady=(0, 8))
-        self.manufacturer_combo.bind("<<ComboboxSelected>>", lambda _e: self._update_inlet_sizes())
         ttk.Label(frame, text="Inlet Size (in.)").grid(row=2, column=3, sticky="w", padx=6, pady=(6, 2))
         self.inlet_combo = ttk.Combobox(frame, textvariable=self.inlet_var, state="readonly", width=10)
         self.inlet_combo.grid(row=3, column=3, sticky="ew", padx=6, pady=(0, 8))
+        area_entry = self._labeled_entry(frame, "SA Area (ft²)", 2, 4, self.group_area_var, width=10)
+        area_entry.configure(state="readonly", takefocus=False)
+        kfactor_entry = self._labeled_entry(frame, "K Factor", 2, 5, self.group_kfactor_var, width=10)
+        kfactor_entry.configure(state="readonly", takefocus=False)
+        self.manufacturer_var.trace_add("write", self._update_inlet_sizes)
+        self.inlet_var.trace_add("write", self._update_group_preview)
         self._update_inlet_sizes()
 
         self._labeled_entry(frame, "CLG Max Flow", 4, 0, self.maxflow_var)
@@ -254,7 +277,7 @@ class RACGeneratorApp(tk.Tk):
         self.tree.bind("<Double-1>", self._begin_edit)
         ttk.Label(
             self.devices_tab,
-            text="Tip: edit Served By directly if needed. Derived Instance/FQR/Area/K Factor recalculate automatically.",
+            text="Double-click to edit. Enter: next row. Tab: next editable column. Shift reverses direction. Esc: cancel edit.",
             foreground="#555555"
         ).pack(anchor="w", pady=(6, 0))
 
@@ -295,12 +318,22 @@ class RACGeneratorApp(tk.Tk):
                 return candidate
         return next(iter(self.manufacturer_data), "Generic")
 
-    def _update_inlet_sizes(self):
+    def _update_inlet_sizes(self, *_args):
         sizes = sorted(self.manufacturer_data.get(self.manufacturer_var.get(), {}).keys())
         valid = [str(s) for s in sizes if self.manufacturer_data[self.manufacturer_var.get()][s] != (None, None)]
         self.inlet_combo["values"] = valid
         if self.inlet_var.get() not in valid:
             self.inlet_var.set(valid[0] if valid else "")
+        self._update_group_preview()
+
+    def _update_group_preview(self, *_args):
+        try:
+            inlet_size = int(self.inlet_var.get())
+        except ValueError:
+            inlet_size = None
+        area, kfactor = manufacturer_lookup(self.manufacturer_data, self.manufacturer_var.get(), inlet_size)
+        self.group_area_var.set("—" if area is None else f"{area:g}")
+        self.group_kfactor_var.set("—" if kfactor is None else f"{kfactor:g}")
 
     @staticmethod
     def _optional_float(value: str):
@@ -361,16 +394,18 @@ class RACGeneratorApp(tk.Tk):
         for index, record in enumerate(self.records):
             values = [self._value_for_tree(getattr(record, key)) for key, _h, _w in self.DISPLAY_COLUMNS]
             self.tree.insert("", "end", iid=str(index), values=values)
+        self._update_preflight_status()
+
+    def _update_preflight_status(self):
         errors, warnings = validate_records_for_sct(self.records, self._existing_equipment()) if self.records else ([], [])
         if errors:
             self.status_var.set(f"SCT Preflight: {len(errors)} error(s), {len(warnings)} warning(s)")
         elif warnings:
             self.status_var.set(f"SCT Preflight: no errors, {len(warnings)} warning(s)")
+        else:
+            self.status_var.set("SCT Preflight: no errors or warnings" if self.records else "Ready")
 
     def _begin_edit(self, event):
-        if self._editor is not None:
-            self._editor.destroy()
-            self._editor = None
         if self.tree.identify("region", event.x, event.y) != "cell":
             return
         row_id = self.tree.identify_row(event.y)
@@ -378,35 +413,94 @@ class RACGeneratorApp(tk.Tk):
         if not row_id or not column_id:
             return
         col_index = int(column_id.replace("#", "")) - 1
+        if self._finish_edit():
+            self._open_cell_editor(row_id, col_index)
+
+    def _open_cell_editor(self, row_id: str, col_index: int):
         key = self.DISPLAY_COLUMNS[col_index][0]
-        if key not in self.EDITABLE_COLUMNS:
+        if key not in self.EDITABLE_COLUMNS or not self.tree.exists(row_id):
             return
-        bbox = self.tree.bbox(row_id, column_id)
+        self.tree.see(row_id)
+        self.tree.update_idletasks()
+        bbox = self.tree.bbox(row_id, key)
         if not bbox:
             return
         x, y, width, height = bbox
+        # Treeview.see() scrolls rows only; reveal columns reached with Tab too.
+        visible_width = self.tree.winfo_width() - 4
+        if x < 2 or x + width > visible_width:
+            total_width = sum(self.tree.column(column, "width") for column, _h, _w in self.DISPLAY_COLUMNS)
+            offset = self.tree.xview()[0] * total_width
+            offset += x - 2 if x < 2 else x + width - visible_width
+            self.tree.xview_moveto(max(0, offset) / total_width)
+            self.tree.update_idletasks()
+            x, y, width, height = self.tree.bbox(row_id, key)
+
+        self.tree.selection_set(row_id)
+        self.tree.focus(row_id)
         editor = ttk.Entry(self.tree)
         editor.insert(0, self.tree.set(row_id, key))
         editor.select_range(0, tk.END)
         editor.place(x=x, y=y, width=width, height=height)
-        editor.focus_set()
         self._editor = editor
+        self._edit_cell = (row_id, col_index)
+        editor.focus_set()
 
-        def save(_event=None):
-            self._save_edit(int(row_id), key, editor.get())
-            editor.destroy()
+        def finish(_event=None, *, row_step=0, column_step=0, save=True):
+            # A queued FocusOut from a destroyed editor must not close its successor.
+            if self._editor is editor:
+                self._finish_edit(row_step=row_step, column_step=column_step, save=save)
+            return "break"
+
+        editor.bind("<Return>", lambda event: finish(event, row_step=1))
+        editor.bind("<KP_Enter>", lambda event: finish(event, row_step=1))
+        editor.bind("<Shift-Return>", lambda event: finish(event, row_step=-1))
+        editor.bind("<Tab>", lambda event: finish(event, column_step=1))
+        editor.bind("<Shift-Tab>", lambda event: finish(event, column_step=-1))
+        if self.tk.call("tk", "windowingsystem") == "x11":
+            editor.bind("<ISO_Left_Tab>", lambda event: finish(event, column_step=-1))
+        editor.bind("<FocusOut>", finish)
+        editor.bind("<Escape>", lambda event: finish(event, save=False))
+
+    def _finish_edit(self, *, row_step=0, column_step=0, save=True) -> bool:
+        if self._finishing_edit:
+            return False
+        if self._editor is None:
+            return True
+        editor = self._editor
+        row_id, col_index = self._edit_cell
+        key = self.DISPLAY_COLUMNS[col_index][0]
+        self._finishing_edit = True
+        try:
+            if save and not self._save_edit(int(row_id), key, editor.get()):
+                editor.focus_set()
+                editor.select_range(0, tk.END)
+                return False
             self._editor = None
-
-        def cancel(_event=None):
+            self._edit_cell = None
             editor.destroy()
-            self._editor = None
+        finally:
+            self._finishing_edit = False
 
-        editor.bind("<Return>", save)
-        editor.bind("<FocusOut>", save)
-        editor.bind("<Escape>", cancel)
+        if row_step or column_step:
+            rows = self.tree.get_children()
+            row_index = rows.index(row_id) + row_step
+            if column_step:
+                editable = [i for i, (column, _h, _w) in enumerate(self.DISPLAY_COLUMNS) if column in self.EDITABLE_COLUMNS]
+                next_index = editable.index(col_index) + column_step
+                row_offset, next_index = divmod(next_index, len(editable))
+                row_index += row_offset
+                col_index = editable[next_index]
+            if 0 <= row_index < len(rows):
+                self._open_cell_editor(rows[row_index], col_index)
+            else:
+                self.tree.focus_set()
+        elif not save:
+            self.tree.focus_set()
+        return True
 
-    def _save_edit(self, record_index: int, key: str, text: str):
-        record = self.records[record_index]
+    def _save_edit(self, record_index: int, key: str, text: str) -> bool:
+        record = replace(self.records[record_index])
         try:
             if key in {"mac_address", "ip_controller_number", "inlet_size"}:
                 value = None if text.strip() == "" else int(text)
@@ -423,9 +517,14 @@ class RACGeneratorApp(tk.Tk):
                 record, self.manufacturer_data,
                 self.instance_mode_var.get().startswith("Generate"), self.fqr_mode_var.get()
             )
-            self._refresh_tree()
         except Exception as exc:
-            messagebox.showerror("Invalid value", str(exc))
+            messagebox.showerror("Invalid value", str(exc), parent=self)
+            return False
+        self.records[record_index] = record
+        values = [self._value_for_tree(getattr(record, column)) for column, _h, _w in self.DISPLAY_COLUMNS]
+        self.tree.item(str(record_index), values=values)
+        self._update_preflight_status()
+        return True
 
     def recalculate_all(self):
         for record in self.records:

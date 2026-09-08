@@ -8,11 +8,14 @@ Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedu
 - Supports custom equipment prefix, separator, start/end numbers, and digit padding.
 - Generates device names from a configurable device prefix.
 - Supports MS/TP or IP controller numbering.
+- Shows DHCP, Subnet Mask, and IP Router controls only for IP networks; switching network type preserves entered settings.
 - Supports either deterministic BACnet Instances or leaving Instance blank for SCT.
 - Treats FQR separately from BACnet Instance:
   - **Device Name (SCT recommended)** is the default FQR mode.
   - the original custom workbook FQR convention remains optional.
 - Reads VAV manufacturer Area / K Factor data from the workbook's `Manufacturer` sheet.
+- Previews SA Area and K Factor beside the manufacturer/inlet selections in Equipment Group. Both values update immediately when either selection changes; unavailable values display a dash.
+- Supports spreadsheet-style device editing: Enter saves and moves down, Tab saves and moves to the next editable column, and Shift reverses direction. Tab wraps between rows and skips calculated fields. Escape cancels the current edit; invalid values stay open for correction.
 - Supports the five current Single-Duct VAV RAC parameters:
   - `SA-AREA` / `AV3111`
   - `SA-KFACTOR` / `AV3112`
@@ -23,6 +26,7 @@ Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedu
 - Builds a dependency graph from `Served By Equipment Name` and automatically calculates the required top-down SCT import order.
 - Detects circular `Served By` relationships and unresolved serving equipment.
 - Performs SCT preflight validation for required fields, FQRs, parent relationships, BACnet Instance range, MS/TP MAC range, duplicates, and duplicate MS/TP addresses on the same engine/trunk.
+- Displays preflight results and export warnings in resizable, scrollable dialogs. Export warnings offer **Export anyway** and **Cancel**; closing the dialog cancels the export.
 - Exports a master RAC workbook that includes:
   - `SCT Setup Guide`
   - `SCT Import Plan`
@@ -136,6 +140,14 @@ python main.py
 ```bash
 python -m unittest discover -s tests
 ```
+
+UI tests use real Tk widgets and keyboard events. On Linux without a display, they are skipped; run them with Xvfb installed:
+
+```bash
+xvfb-run -a python -m unittest discover -s tests -v
+```
+
+GitHub Actions runs both the logic and UI tests with a virtual display.
 
 ## Next improvements
 
