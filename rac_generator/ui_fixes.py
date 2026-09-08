@@ -80,15 +80,24 @@ class ImprovedRACGeneratorApp(RACGeneratorApp):
         )
         footer.grid(row=2, column=0, sticky="w", pady=(8, 0))
 
-    def _show_scrollable_dialog(self, title: str, text: str, *, ok_text: str = "OK") -> None:
-        """Show long informational text in a resizable, scrollable modal dialog."""
+    def _show_scrollable_dialog(
+        self, title: str, text: str, *, ok_text: str = "OK", cancel_text: str | None = None
+    ) -> bool:
+        """Wait for acknowledgment or an explicit export/cancel decision."""
+        accepted = False
         dialog = tk.Toplevel(self)
+
+        def close(result=False):
+            nonlocal accepted
+            accepted = result
+            dialog.destroy()
+
         dialog.title(title)
         dialog.geometry("760x520")
         dialog.minsize(520, 320)
         dialog.resizable(True, True)
         dialog.transient(self)
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+        dialog.protocol("WM_DELETE_WINDOW", close)
 
         outer = ttk.Frame(dialog, padding=12)
         outer.pack(fill="both", expand=True)
@@ -121,16 +130,24 @@ class ImprovedRACGeneratorApp(RACGeneratorApp):
 
         buttons = ttk.Frame(outer)
         buttons.grid(row=1, column=0, sticky="e", pady=(12, 0))
-        ok_button = ttk.Button(buttons, text=ok_text, command=dialog.destroy)
+        ok_button = ttk.Button(buttons, text=ok_text, command=lambda: close(True))
         ok_button.pack(side="right")
+        cancel_button = None
+        if cancel_text is not None:
+            cancel_button = ttk.Button(buttons, text=cancel_text, command=close)
+            cancel_button.pack(side="right", padx=(0, 8))
 
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        dialog.bind("<Return>", lambda _event: dialog.destroy())
+        dialog.bind("<Escape>", lambda _event: close())
+        dialog.bind("<Return>", lambda _event: close(dialog.focus_get() is not cancel_button))
         dialog.update_idletasks()
-        ok_button.focus_set()
+        (cancel_button or ok_button).focus_set()
         dialog.grab_set()
+        self.wait_window(dialog)
+        return accepted
 
     def show_preflight(self):
+        if not self._finish_edit():
+            return
         errors, warnings = self._preflight_results()
         parts: list[str] = []
 
@@ -143,6 +160,23 @@ class ImprovedRACGeneratorApp(RACGeneratorApp):
             parts.append("WARNINGS — confirm in SCT\n\n• " + "\n• ".join(warnings))
 
         self._show_scrollable_dialog("SCT Preflight", "\n\n".join(parts))
+
+    def _validate_before_export(self) -> bool:
+        if not self._finish_edit():
+            return False
+        errors, warnings = self._preflight_results()
+        if errors:
+            self._show_scrollable_dialog(
+                "SCT Preflight failed", "Fix these items before export:\n\n• " + "\n• ".join(errors)
+            )
+            return False
+        if warnings:
+            return self._show_scrollable_dialog(
+                "SCT Preflight warnings",
+                "No blocking errors were found, but confirm these items:\n\n• " + "\n• ".join(warnings),
+                ok_text="Export anyway", cancel_text="Cancel",
+            )
+        return True
 
     def _preflight_results(self):
         from .logic import validate_records_for_sct
