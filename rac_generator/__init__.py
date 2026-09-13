@@ -1,6 +1,6 @@
 """RAC Generator application package."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Keep the public validation API stable while using the enhanced SCT-aware
 # implementation that supports legitimate repeated-controller/multi-equipment rows.

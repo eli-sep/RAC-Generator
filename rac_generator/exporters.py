@@ -10,6 +10,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from .logic import VAV_SD_PARAMETERS, build_dependency_levels, ordered_records_for_sct
+from .file_io import atomic_text_file
 from .models import DeviceRecord
 
 
@@ -33,6 +34,14 @@ BASE_FIELD_NAMES = [
     "Equipment Definition Name", "Controller Template Name", None,
 ]
 
+BASE_RECORD_FIELDS = [
+    "site_hierarchy", "room_number", "leaf_space", "device_name", "fqr", "device_description",
+    "equipment_name", "served_by", "controller_part", "engine_name", "trunk_name",
+    "controller_host_name", "mac_address", "ip_controller_number", "zigbee_pan_offset",
+    "instance", "n2_address", "dhcp_enabled", "ip_address", "subnet_mask", "ip_router",
+    "eth1", "eth2", "equipment_definition", "controller_template",
+]
+
 SCT_SETUP_GUIDE = [
     ("1", "Create/open the SCT archive", "The archive must contain the site structure that will receive the field controllers."),
     ("2", "Create Site, Site Director, supervisory devices, and integrations", "The Engine Name and Trunk Name used by the RAC schedule must already exist exactly as named in SCT."),
@@ -46,15 +55,7 @@ SCT_SETUP_GUIDE = [
 
 
 def _record_base_values(record: DeviceRecord) -> list[object]:
-    return [
-        record.site_hierarchy, record.room_number, record.leaf_space, record.device_name,
-        record.fqr, record.device_description, record.equipment_name, record.served_by,
-        record.controller_part, record.engine_name, record.trunk_name,
-        record.controller_host_name, record.mac_address, record.ip_controller_number,
-        record.zigbee_pan_offset, record.instance, record.n2_address, record.dhcp_enabled,
-        record.ip_address, record.subnet_mask, record.ip_router, record.eth1, record.eth2,
-        record.equipment_definition, record.controller_template,
-    ]
+    return [getattr(record, field_name) for field_name in BASE_RECORD_FIELDS]
 
 
 def _parameters_in_use(records: Iterable[DeviceRecord]):
@@ -63,7 +64,23 @@ def _parameters_in_use(records: Iterable[DeviceRecord]):
     for name, attr_id, attr_type, field_name in VAV_SD_PARAMETERS:
         if any(getattr(r, field_name) is not None for r in records):
             used.append((name, attr_id, attr_type, field_name))
+    seen = {(column[1], column[2]) for column in used}
+    for record in records:
+        for parameter in record.extra_parameters:
+            key = (parameter.attribute_id, parameter.attribute_type)
+            if key not in seen:
+                used.append((parameter.name, *key, None))
+                seen.add(key)
     return used
+
+
+def _parameter_value(record: DeviceRecord, column):
+    if column[3] is not None:
+        return getattr(record, column[3])
+    for parameter in record.extra_parameters:
+        if (parameter.attribute_id, parameter.attribute_type) == (column[1], column[2]):
+            return parameter.value
+    return None
 
 
 def _rac_rows(records: list[DeviceRecord]) -> list[list[object]]:
@@ -100,14 +117,14 @@ def _rac_rows(records: list[DeviceRecord]) -> list[list[object]]:
 
     for record in records:
         values = _record_base_values(record)
-        values += [getattr(record, p[3]) for p in params] if params else [None]
+        values += [_parameter_value(record, p) for p in params] if params else [None]
         rows.append(values)
     return rows
 
 
 def export_rac_csv(path: str | Path, records: list[DeviceRecord]) -> None:
     path = Path(path)
-    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+    with atomic_text_file(path, encoding="utf-8-sig") as handle:
         csv.writer(handle).writerows(_rac_rows(records))
 
 
@@ -132,6 +149,13 @@ def _style_header(cell) -> None:
     cell.font = Font(bold=True, color="FFFFFF")
     cell.fill = PatternFill("solid", fgColor="1F4E78")
     cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+
+def _write_value(sheet, row, column, value):
+    cell = sheet.cell(row, column)
+    cell.value = value
+    if isinstance(value, str):
+        cell.data_type = "s"
 
 
 def _add_setup_guide(wb) -> None:
@@ -166,11 +190,11 @@ def _add_import_plan(wb, levels: list[list[DeviceRecord]], existing_equipment: s
                 f"Import SCT_{level_index:02d}_Level_{level_index - 1}.csv, then Save in Rapid Archive before the next level.",
             ]
             for col, value in enumerate(values, start=1):
-                ws.cell(row, col, value)
+                _write_value(ws, row, col, value)
             row += 1
     existing = existing_equipment if isinstance(existing_equipment, str) else ", ".join(existing_equipment)
     ws.cell(row + 1, 1, "Pre-existing equipment declared in app:")
-    ws.cell(row + 1, 2, existing or "None")
+    _write_value(ws, row + 1, 2, existing or "None")
     for col, width in enumerate([14, 24, 26, 30, 20, 16, 70], start=1):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = "A2"
@@ -204,15 +228,16 @@ def export_rac_workbook(
     rac.cell(3, 26).value = "Parameters"
     for idx, param in enumerate(params, start=26):
         rac.cell(1, idx).value = "RAC-4448" if idx == 26 else None
-        rac.cell(4, idx).value = param[0]
-        rac.cell(5, idx).value = param[1]
-        rac.cell(6, idx).value = param[2]
+        _write_value(rac, 4, idx, param[0])
+        _write_value(rac, 5, idx, param[1])
+        _write_value(rac, 6, idx, param[2])
 
     for row_index, record in enumerate(ordered, start=7):
         for col, value in enumerate(_record_base_values(record), start=1):
-            rac.cell(row_index, col).value = value
+            _write_value(rac, row_index, col, value)
         for param_index, param in enumerate(params, start=26):
-            rac.cell(row_index, param_index).value = getattr(record, param[3])
+            value = _parameter_value(record, param)
+            _write_value(rac, row_index, param_index, value)
 
     if "Generated Scratchpad" in wb.sheetnames:
         del wb["Generated Scratchpad"]
@@ -243,7 +268,7 @@ def export_rac_workbook(
             record.clg_maxflow, record.clg_minflow, record.htg_minflow, record.comments,
         ]
         for col, value in enumerate(values, start=1):
-            scratch.cell(row_index, col).value = value
+            _write_value(scratch, row_index, col, value)
 
     scratch.freeze_panes = "A2"
     scratch.auto_filter.ref = f"A1:{get_column_letter(len(scratch_headers))}{max(1, len(ordered) + 1)}"

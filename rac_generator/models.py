@@ -39,6 +39,14 @@ class EquipmentGroup:
 
 
 @dataclass
+class ExtraParameter:
+    name: str
+    attribute_id: str
+    attribute_type: str
+    value: str = ""
+
+
+@dataclass
 class DeviceRecord:
     site_hierarchy: str = ""
     room_number: str = ""
@@ -81,3 +89,5 @@ class DeviceRecord:
     comments: str = ""
 
     parameters: dict[str, object] = field(default_factory=dict)
+    extra_parameters: list[ExtraParameter] = field(default_factory=list)
+    preserve_imported_values: bool = False
