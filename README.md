@@ -1,9 +1,12 @@
-# RAC Generator v0.2
+# RAC Generator v0.3
 
 Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedule Template** and reviewed against the SCT Release 18 Rapid Archive workflow.
 
 ## What this version does
 
+- Saves and reopens complete, unfinished projects, including device data, manufacturer choices, group defaults, and equipment already in SCT.
+- Saves working SCT CSVs before preflight and imports one or more SCT CSVs or existing RAC workbooks to continue editing.
+- Preserves imported identifiers, network settings, and additional CAF parameters when saving and exporting.
 - Generates equipment groups such as `VAV-01` through `VAV-20`.
 - Supports custom equipment prefix, separator, start/end numbers, and digit padding.
 - Generates device names from a configurable device prefix.
@@ -36,6 +39,28 @@ Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedu
   - `SCT_01_Level_0.csv`
   - `SCT_02_Level_1.csv`
   - `SCT_03_Level_2.csv`
+
+## Save your work and resume later
+
+Use **Save Project** while building a database, even if required SCT fields are still blank. The `.rac.json` file stores all device data and editing settings, including manufacturer/inlet selections, group defaults, and equipment already in SCT. Use **Open Project** to pick up where you left off. Projects with only form settings and no generated devices can also be saved.
+
+| Action | File | What it does |
+| --- | --- | --- |
+| **Save Project / Open Project** | `.rac.json` | Preserves the complete editing session. Recommended for unfinished work. |
+| **Save Working CSV** | `.csv` | Saves all current schedule rows using the same six-header SCT v3 format as the final CSV exports, without requiring preflight to pass. |
+| **Import Schedule** | `.csv` or `.xlsx` | Adds schedule rows to the current project. Select multiple files to combine staged schedules. Excel files must contain a `Rapid Archive Schedule` sheet. |
+| **Export Staged SCT CSVs** | `.csv` files | Runs preflight and creates the final schedules in the required parent-before-child import order. |
+| **Export Master Workbook** | `.xlsx` | Creates the existing RAC workbook with the schedule, setup guide, import plan, and scratchpad. |
+
+For a CSV workflow, choose **Save Working CSV**, then use **File > New Project** and **Import Schedule** when you want to reopen it as a separate project. Import appends rows, so importing the same schedule twice adds duplicate rows; SCT Preflight will flag conflicts. A working CSV can still be incomplete and is not necessarily ready to import into SCT.
+
+CSV contains the SCT schedule fields, but not manufacturer names, inlet selections, drawing notes, generation defaults, or the list of equipment already in SCT. Excel import reads the `Rapid Archive Schedule` sheet only; it does not restore scratchpad notes or other app settings. Use **Save Project** to retain all of those details. Saving a working CSV leaves the project marked as unsaved until you also save a project file.
+
+Imported FQRs, BACnet Instances, SA Area, and K Factor are retained when editing other cells or using Recalculate. You can edit these values directly on imported rows. Changing a manufacturer/inlet selection explicitly updates that row's Area and K Factor. Additional CAF parameters retain their Attribute ID, Attribute Type, and values through CSV, project, and workbook exports; their values are not currently editable in the table.
+
+The title shows `*` for unsaved project changes. Closing the app, opening another project, or starting a new one offers **Save**, **Discard**, or **Cancel** through the standard Yes/No/Cancel dialog. File > Save Project As creates a separate copy. Keyboard shortcuts are Ctrl+S, Ctrl+Shift+S, Ctrl+O, and Ctrl+N (Cmd on macOS).
+
+Imports accept SCT Rapid Archive **v3** headers, including comma-, semicolon-, or tab-separated CSVs. Keep the six original header rows. Unsupported columns, invalid numbers, and Excel formulas are rejected with an error instead of silently dropping data. When importing multiple files, every file must load successfully before any rows are added. Arbitrary CWD/Excel layouts require a separate mapping and are not accepted as RAC schedules.
 
 ## Why staged files matter
 
@@ -120,7 +145,7 @@ This order is required so `Served By Equipment Name` can resolve to an equipment
 
 ## Important limitations
 
-- Dynamic CAF parameters currently implement the Single-Duct VAV set used by the supplied scratchpad.
+- Generation and table editing of CAF parameters currently implement the Single-Duct VAV set used by the supplied scratchpad. Imports also preserve additional parameter columns for later export.
 - Room Number and Leaf Space are edited per-device rather than generated from a naming rule.
 - Static IP address sequencing is not automated yet. IP projects receive a preflight warning to verify DHCP/static IP configuration in SCT.
 - Controller Template / Equipment Definition names are free text; RAC Generator cannot directly query an SCT archive to prove they exist.
@@ -147,7 +172,7 @@ UI tests use real Tk widgets and keyboard events. On Linux without a display, th
 xvfb-run -a python -m unittest discover -s tests -v
 ```
 
-GitHub Actions runs both the logic and UI tests with a virtual display.
+GitHub Actions runs the file round-trip, logic, and UI tests with a virtual display. File tests cover incomplete projects, SCT CSV and RAC workbook imports, extra CAF parameters, and preservation of a previous file when a save fails. UI tests also cover save/open, cancelled saves, and importing schedules without losing current work.
 
 ## Next improvements
 
@@ -155,7 +180,6 @@ GitHub Actions runs both the logic and UI tests with a virtual display.
 2. dynamic parameter sets from the additional parameter sheets;
 3. bulk room / leaf-space import and paste-from-Excel;
 4. complete static IP sequencing and validation;
-5. saved project files;
-6. project-specific FQR schemes;
-7. explicit multi-equipment-per-controller workflow;
-8. Windows standalone `.exe` packaging.
+5. project-specific FQR schemes;
+6. explicit multi-equipment-per-controller workflow;
+7. Windows standalone `.exe` packaging.

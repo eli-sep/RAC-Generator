@@ -310,39 +310,48 @@ def recalculate_record(
     manufacturer_data: dict[str, dict[int, tuple[float | None, float | None]]],
     generate_instance: bool = True,
     fqr_mode: str = "Device Name (SCT recommended)",
+    *,
+    changed_field: str | None = None,
 ) -> DeviceRecord:
-    record.device_description = build_device_description(record.device_name, record.leaf_space, record.room_number)
-    record.box_heat, record.supplemental_heat = infer_heat_flags(record.controller_template)
-    record.sa_area, record.sa_kfactor = manufacturer_lookup(
-        manufacturer_data, record.manufacturer, record.inlet_size
-    )
+    imported = record.preserve_imported_values
+    if not imported or changed_field in {"device_name", "leaf_space", "room_number"}:
+        record.device_description = build_device_description(record.device_name, record.leaf_space, record.room_number)
+    if not imported or changed_field == "controller_template":
+        record.box_heat, record.supplemental_heat = infer_heat_flags(record.controller_template)
+    if not imported or changed_field in {"manufacturer", "inlet_size"}:
+        record.sa_area, record.sa_kfactor = manufacturer_lookup(
+            manufacturer_data, record.manufacturer, record.inlet_size
+        )
 
-    if generate_instance:
-        try:
-            record.instance = generate_bacnet_instance(
-                record.engine_name, record.trunk_name, record.mac_address, record.ip_controller_number
-            )
-        except ValueError:
-            record.instance = None
-    else:
-        record.instance = None
-
-    if fqr_mode.startswith("Device Name"):
-        record.fqr = record.device_name.strip()
-    elif fqr_mode.startswith("Custom workbook"):
-        if record.instance is not None:
+    # CSV identifiers are independent of this app's optional numbering convention.
+    if not imported:
+        if generate_instance:
             try:
-                record.fqr = generate_fqr(
-                    record.engine_name, record.trunk_name, record.controller_part, record.instance
+                record.instance = generate_bacnet_instance(
+                    record.engine_name, record.trunk_name, record.mac_address, record.ip_controller_number
                 )
             except ValueError:
+                record.instance = None
+        else:
+            record.instance = None
+
+        if fqr_mode.startswith("Device Name"):
+            record.fqr = record.device_name.strip()
+        elif fqr_mode.startswith("Custom workbook"):
+            if record.instance is not None:
+                try:
+                    record.fqr = generate_fqr(
+                        record.engine_name, record.trunk_name, record.controller_part, record.instance
+                    )
+                except ValueError:
+                    record.fqr = ""
+            else:
                 record.fqr = ""
         else:
-            record.fqr = ""
-    else:
-        record.fqr = record.fqr.strip() or record.device_name.strip()
+            record.fqr = record.fqr.strip() or record.device_name.strip()
 
     record.parameters = {
+        **record.parameters,
         "SA-AREA": record.sa_area,
         "SA-KFACTOR": record.sa_kfactor,
         "CLG-MAXFLOW": record.clg_maxflow,

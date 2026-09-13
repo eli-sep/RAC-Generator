@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 import tkinter as tk
 from dataclasses import replace
@@ -16,6 +17,7 @@ from .logic import (
     validate_records_for_sct,
 )
 from .models import DeviceRecord, EquipmentGroup, ProjectDefaults
+from .project_ui import ProjectFilesMixin
 
 
 def resource_path(relative: str) -> Path:
@@ -23,7 +25,7 @@ def resource_path(relative: str) -> Path:
     return base / relative
 
 
-class RACGeneratorApp(tk.Tk):
+class RACGeneratorApp(ProjectFilesMixin, tk.Tk):
     DISPLAY_COLUMNS = [
         ("equipment_name", "Equipment", 110),
         ("device_name", "Device", 130),
@@ -49,6 +51,7 @@ class RACGeneratorApp(tk.Tk):
         "mac_address", "ip_controller_number", "manufacturer", "inlet_size",
         "clg_maxflow", "clg_minflow", "htg_minflow", "controller_template",
     }
+    IMPORTED_EDITABLE_COLUMNS = {"instance", "fqr", "sa_area", "sa_kfactor"}
 
     def __init__(self):
         super().__init__()
@@ -68,6 +71,7 @@ class RACGeneratorApp(tk.Tk):
         self._finishing_edit = False
         self._build_style()
         self._build_ui()
+        self._init_project_files()
 
     def _build_style(self):
         style = ttk.Style(self)
@@ -83,6 +87,7 @@ class RACGeneratorApp(tk.Tk):
         outer = ttk.Frame(self, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="RAC Generator", style="Title.TLabel").pack(anchor="w", pady=(0, 8))
+        self._build_file_controls(outer)
 
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill="both", expand=True)
@@ -277,7 +282,8 @@ class RACGeneratorApp(tk.Tk):
         self.tree.bind("<Double-1>", self._begin_edit)
         ttk.Label(
             self.devices_tab,
-            text="Double-click to edit. Enter: next row. Tab: next editable column. Shift reverses direction. Esc: cancel edit.",
+            text="Double-click to edit. Enter: next row. Tab: next column. Shift: reverse. Esc: cancel. Imported FQR, Instance, Area and K Factor can be edited directly.",
+            wraplength=1150,
             foreground="#555555"
         ).pack(anchor="w", pady=(6, 0))
 
@@ -338,7 +344,10 @@ class RACGeneratorApp(tk.Tk):
     @staticmethod
     def _optional_float(value: str):
         text = value.strip()
-        return None if text == "" else float(text)
+        number = None if text == "" else float(text)
+        if number is not None and not math.isfinite(number):
+            raise ValueError("Enter a finite number or leave the field blank.")
+        return number
 
     def _existing_equipment(self) -> str:
         return self.existing_equipment_text.get("1.0", "end").strip()
@@ -362,6 +371,8 @@ class RACGeneratorApp(tk.Tk):
         )
 
     def add_group(self):
+        if not self._finish_edit():
+            return
         try:
             defaults = self._project_defaults()
             inlet = int(self.inlet_var.get()) if self.inlet_var.get().strip() else None
@@ -380,6 +391,7 @@ class RACGeneratorApp(tk.Tk):
             return
         self.records.extend(new_records)
         self._refresh_tree()
+        self._mark_dirty()
         self.status_var.set(f"Added {len(new_records)} devices. Total: {len(self.records)}")
 
     def _value_for_tree(self, value):
@@ -416,9 +428,15 @@ class RACGeneratorApp(tk.Tk):
         if self._finish_edit():
             self._open_cell_editor(row_id, col_index)
 
+    def _editable_columns(self, row_id):
+        columns = self.EDITABLE_COLUMNS
+        if self.records[int(row_id)].preserve_imported_values:
+            columns = columns | self.IMPORTED_EDITABLE_COLUMNS
+        return [i for i, (key, _heading, _width) in enumerate(self.DISPLAY_COLUMNS) if key in columns]
+
     def _open_cell_editor(self, row_id: str, col_index: int):
         key = self.DISPLAY_COLUMNS[col_index][0]
-        if key not in self.EDITABLE_COLUMNS or not self.tree.exists(row_id):
+        if not self.tree.exists(row_id) or col_index not in self._editable_columns(row_id):
             return
         self.tree.see(row_id)
         self.tree.update_idletasks()
@@ -439,7 +457,8 @@ class RACGeneratorApp(tk.Tk):
         self.tree.selection_set(row_id)
         self.tree.focus(row_id)
         editor = ttk.Entry(self.tree)
-        editor.insert(0, self.tree.set(row_id, key))
+        value = getattr(self.records[int(row_id)], key)
+        editor.insert(0, "" if value is None else str(value))
         editor.select_range(0, tk.END)
         editor.place(x=x, y=y, width=width, height=height)
         self._editor = editor
@@ -486,11 +505,17 @@ class RACGeneratorApp(tk.Tk):
             rows = self.tree.get_children()
             row_index = rows.index(row_id) + row_step
             if column_step:
-                editable = [i for i, (column, _h, _w) in enumerate(self.DISPLAY_COLUMNS) if column in self.EDITABLE_COLUMNS]
+                editable = self._editable_columns(row_id)
                 next_index = editable.index(col_index) + column_step
-                row_offset, next_index = divmod(next_index, len(editable))
-                row_index += row_offset
-                col_index = editable[next_index]
+                if 0 <= next_index < len(editable):
+                    col_index = editable[next_index]
+                else:
+                    row_index += column_step
+                    if 0 <= row_index < len(rows):
+                        col_index = self._editable_columns(rows[row_index])[0 if column_step > 0 else -1]
+            else:
+                while 0 <= row_index < len(rows) and col_index not in self._editable_columns(rows[row_index]):
+                    row_index += row_step
             if 0 <= row_index < len(rows):
                 self._open_cell_editor(rows[row_index], col_index)
             else:
@@ -502,12 +527,14 @@ class RACGeneratorApp(tk.Tk):
     def _save_edit(self, record_index: int, key: str, text: str) -> bool:
         record = replace(self.records[record_index])
         try:
-            if key in {"mac_address", "ip_controller_number", "inlet_size"}:
+            if key in {"mac_address", "ip_controller_number", "inlet_size", "instance"}:
                 value = None if text.strip() == "" else int(text)
-            elif key in {"clg_maxflow", "clg_minflow", "htg_minflow"}:
-                value = None if text.strip() == "" else float(text)
+            elif key in {"clg_maxflow", "clg_minflow", "htg_minflow", "sa_area", "sa_kfactor"}:
+                value = self._optional_float(text)
             else:
                 value = text
+            if getattr(record, key) == value:
+                return True
             setattr(record, key, value)
             if key == "mac_address" and value is not None:
                 record.ip_controller_number = None
@@ -515,37 +542,51 @@ class RACGeneratorApp(tk.Tk):
                 record.mac_address = None
             recalculate_record(
                 record, self.manufacturer_data,
-                self.instance_mode_var.get().startswith("Generate"), self.fqr_mode_var.get()
+                self.instance_mode_var.get().startswith("Generate"), self.fqr_mode_var.get(), changed_field=key,
             )
         except Exception as exc:
             messagebox.showerror("Invalid value", str(exc), parent=self)
             return False
+        changed = record != self.records[record_index]
         self.records[record_index] = record
         values = [self._value_for_tree(getattr(record, column)) for column, _h, _w in self.DISPLAY_COLUMNS]
         self.tree.item(str(record_index), values=values)
         self._update_preflight_status()
+        if changed:
+            self._mark_dirty()
         return True
 
     def recalculate_all(self):
+        if not self._finish_edit():
+            return
         for record in self.records:
             recalculate_record(
                 record, self.manufacturer_data,
                 self.instance_mode_var.get().startswith("Generate"), self.fqr_mode_var.get()
             )
         self._refresh_tree()
+        if self.records:
+            self._mark_dirty()
         self.status_var.set(f"Recalculated {len(self.records)} devices.")
 
     def delete_selected(self):
+        if not self._finish_edit():
+            return
         selected = sorted((int(i) for i in self.tree.selection()), reverse=True)
         for index in selected:
             del self.records[index]
         self._refresh_tree()
+        if selected:
+            self._mark_dirty()
         self.status_var.set(f"Deleted {len(selected)} device(s). Total: {len(self.records)}")
 
     def clear_all(self):
+        if not self._finish_edit():
+            return
         if self.records and messagebox.askyesno("Clear devices", "Remove all generated devices?"):
             self.records.clear()
             self._refresh_tree()
+            self._mark_dirty()
             self.status_var.set("All devices cleared.")
 
     def show_preflight(self):

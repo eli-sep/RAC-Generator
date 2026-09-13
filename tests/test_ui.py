@@ -1,10 +1,16 @@
 import os
 import sys
+import tempfile
 import tkinter as tk
 import unittest
+from pathlib import Path
 from tkinter import ttk
 from unittest.mock import patch
 
+from rac_generator.exporters import export_rac_csv
+from rac_generator.importers import import_rac_schedule
+from rac_generator.models import DeviceRecord, ExtraParameter
+from rac_generator.project_io import load_project, save_project
 from rac_generator.ui_fixes import ImprovedRACGeneratorApp
 
 
@@ -15,6 +21,9 @@ class UITests(unittest.TestCase):
             raise unittest.SkipTest("Tk UI tests need a display; run with xvfb-run on Linux.")
 
     def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
         data = {
             "Titus": {8: (0.35, 2.39), 10: (0.55, 2.31)},
             "Other": {8: (0.36, 3.1), 12: (0.8, 2.7)},
@@ -214,6 +223,189 @@ class UITests(unittest.TestCase):
         with patch.object(self.app, "_preflight_results", return_value=(messages, [])):
             self.app.after(50, lambda: self.dismiss_dialog("OK"))
             self.assertFalse(self.app._validate_before_export())
+
+    def test_project_save_commits_cell_and_restores_incomplete_work_and_settings(self):
+        self.generate_devices(1)
+        self.app.manufacturer_var.set("Other")
+        self.app.inlet_var.set("12")
+        self.app.start_var.set("unfinished")
+        self.app.maxflow_var.set("1.")
+        self.app.site_var.set("")
+        self.app.network_type_var.set("IP")
+        self.app.dhcp_var.set(False)
+        self.app.existing_equipment_text.insert("1.0", "AHU-01\nAHU-02\n")
+        self.edit(0, "room_number", "001")
+        path = self.directory / "unfinished.rac.json"
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(path)), \
+             patch.object(self.app, "_validate_before_export", side_effect=AssertionError("Drafts must bypass preflight")):
+            self.assertTrue(self.app.save_project())
+        self.app.update()
+        self.assertFalse(self.app._dirty)
+        self.assertIsNone(self.app._editor)
+        settings, records = load_project(path)
+        self.assertEqual(records[0].room_number, "001")
+        self.assertEqual(settings, self.app._capture_settings())
+        self.app.manufacturer_var.set("Titus")
+        self.app.records.clear()
+        with patch("rac_generator.project_ui.filedialog.askopenfilename", return_value=str(path)), \
+             patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=False):
+            self.assertTrue(self.app.open_project())
+        self.app.update()
+        self.assertEqual(self.app.records, records)
+        self.assertEqual(self.app._capture_settings(), settings)
+        self.assertEqual((self.app.manufacturer_var.get(), self.app.inlet_var.get()), ("Other", "12"))
+        self.assertFalse(self.app._dirty)
+        self.assertNotIn(" *", self.app.title())
+
+    def test_form_only_project_and_save_as_keep_both_files(self):
+        first = self.directory / "first.rac.json"
+        second = self.directory / "second.rac.json"
+        self.app.engine_var.set("SNE03")
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(first)):
+            self.assertTrue(self.app.save_project())
+        self.app.engine_var.set("SNE04")
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(second)):
+            self.assertTrue(self.app.save_project_as())
+        self.app.engine_var.set("SNE05")
+        self.assertTrue(self.app.save_project())
+        self.assertEqual(load_project(first)[0]["engine"], "SNE03")
+        self.assertEqual(load_project(second)[0]["engine"], "SNE05")
+        self.assertEqual(load_project(second)[1], [])
+        self.assertEqual(self.app.project_path, second)
+
+    def test_cancelled_or_failed_save_blocks_replacing_and_closing_project(self):
+        self.generate_devices(1)
+        records = list(self.app.records)
+        with patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=None), \
+             patch.object(self.app, "destroy") as destroy:
+            self.app.new_project()
+            self.app.close_project_window()
+            destroy.assert_not_called()
+        with patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=True), \
+             patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=""), \
+             patch.object(self.app, "destroy") as destroy:
+            self.app.new_project()
+            self.app.close_project_window()
+            destroy.assert_not_called()
+        with patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=True), \
+             patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(self.directory / "save.rac.json")), \
+             patch("rac_generator.project_ui.save_project", side_effect=OSError("Disk unavailable")), \
+             patch("rac_generator.project_ui.messagebox.showerror") as error, \
+             patch.object(self.app, "destroy") as destroy:
+            self.app.new_project()
+            self.app.close_project_window()
+            self.assertEqual(error.call_count, 2)
+            destroy.assert_not_called()
+        self.assertEqual(self.app.records, records)
+        self.assertTrue(self.app._dirty)
+        self.assertIsNone(self.app.project_path)
+
+    def test_opening_same_project_after_saving_keeps_latest_changes(self):
+        path = self.directory / "same.rac.json"
+        self.app.site_var.set("Original")
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(path)):
+            self.assertTrue(self.app.save_project())
+        self.app.site_var.set("Latest")
+        with patch("rac_generator.project_ui.filedialog.askopenfilename", return_value=str(path)), \
+             patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=True):
+            self.assertTrue(self.app.open_project())
+        self.assertEqual(self.app.site_var.get(), "Latest")
+        self.assertFalse(self.app._dirty)
+
+    def test_cancelled_open_and_invalid_file_keep_current_project(self):
+        self.generate_devices(1)
+        records = list(self.app.records)
+        path = self.directory / "other.rac.json"
+        save_project(path, {}, [])
+        with patch("rac_generator.project_ui.filedialog.askopenfilename", return_value=str(path)), \
+             patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=None):
+            self.assertFalse(self.app.open_project())
+        path.write_text("invalid project", encoding="utf-8")
+        with patch("rac_generator.project_ui.filedialog.askopenfilename", return_value=str(path)), \
+             patch("rac_generator.project_ui.messagebox.showerror") as error:
+            self.assertFalse(self.app.open_project())
+        error.assert_called_once()
+        self.assertEqual(self.app.records, records)
+        self.assertTrue(self.app._dirty)
+
+    def test_working_csv_saves_before_preflight_and_can_be_resumed(self):
+        self.generate_devices(1)
+        self.app.records[0].controller_template = ""
+        self.edit(0, "room_number", "001")
+        path = self.directory / "working.csv"
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(path)), \
+             patch.object(self.app, "_validate_before_export", side_effect=AssertionError("Drafts must bypass preflight")):
+            self.assertTrue(self.app.save_working_csv())
+        self.assertTrue(self.app._dirty)  # Only Save Project includes all editing settings.
+        self.assertEqual(import_rac_schedule(path)[0].room_number, "001")
+        with patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=False):
+            self.app.new_project()
+        self.assertEqual(self.app.records, [])
+        self.assertFalse(self.app._dirty)
+        with patch("rac_generator.project_ui.filedialog.askopenfilenames", return_value=(str(path),)):
+            self.assertTrue(self.app.import_schedules())
+        self.assertEqual(self.app.records[0].room_number, "001")
+        self.assertEqual(self.app.records[0].controller_template, "")
+        self.assertEqual(self.app.engine_var.get(), "SNE03")
+        self.assertEqual(self.app.working_csv_path, path)
+        self.assertTrue(self.app._dirty)
+
+    def test_imported_identifiers_survive_navigation_edits_and_recalculate(self):
+        path = self.directory / "existing.csv"
+        record = DeviceRecord(
+            device_name="Existing", equipment_name="VAV-X", room_number="001", leaf_space="Office", fqr="Custom.Path",
+            device_description="Custom description", instance=54321, sa_area=0.375, sa_kfactor=2.77,
+            extra_parameters=[ExtraParameter("OTHER", "AV9999", "Default Value", "001")],
+        )
+        export_rac_csv(path, [record])
+        with patch("rac_generator.project_ui.filedialog.askopenfilenames", return_value=(str(path),)):
+            self.assertTrue(self.app.import_schedules())
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(self.directory / "import.rac.json")):
+            self.assertTrue(self.app.save_project())
+        self.edit(0, "room_number", "001")
+        self.press("<Return>")
+        self.assertFalse(self.app._dirty)
+        self.assertEqual(self.app.records[0].device_description, "Custom description")
+        self.edit(0, "room_number", "002")
+        self.press("<Return>")
+        self.app.recalculate_all()
+        actual = self.app.records[0]
+        self.assertEqual((actual.fqr, actual.instance, actual.sa_area, actual.sa_kfactor),
+                         ("Custom.Path", 54321, 0.375, 2.77))
+        self.assertEqual(actual.extra_parameters, record.extra_parameters)
+        self.assertIn("002", actual.device_description)
+        self.edit(0, "fqr", "Explicit.Correction")
+        self.press("<Return>")
+        self.edit(0, "instance", "123456")
+        self.press("<Return>")
+        self.edit(0, "sa_area", "0.333333333333")
+        self.press("<Return>")
+        area_column = [key for key, _heading, _width in self.app.DISPLAY_COLUMNS].index("sa_area")
+        self.app._open_cell_editor("0", area_column)
+        self.app.update()
+        self.assertEqual(self.app._editor.get(), "0.333333333333")
+        self.press("<Tab>")
+        self.assert_editing(0, "sa_kfactor")
+        self.app._finish_edit()
+        self.app.recalculate_all()
+        self.assertEqual((self.app.records[0].fqr, self.app.records[0].instance, self.app.records[0].sa_area),
+                         ("Explicit.Correction", 123456, 0.333333333333))
+
+    def test_multiple_imports_append_only_when_all_files_are_valid(self):
+        self.generate_devices(1)
+        original = list(self.app.records)
+        first, second = self.directory / "first.csv", self.directory / "second.csv"
+        export_rac_csv(first, [DeviceRecord(equipment_name="AHU-01", device_name="AHU")])
+        second.write_text("not an SCT CSV", encoding="utf-8")
+        with patch("rac_generator.project_ui.filedialog.askopenfilenames", return_value=(str(first), str(second))), \
+             patch("rac_generator.project_ui.messagebox.showerror") as error:
+            self.assertFalse(self.app.import_schedules())
+        error.assert_called_once()
+        self.assertEqual(self.app.records, original)
+        export_rac_csv(second, [DeviceRecord(equipment_name="AHU-02", device_name="AHU2")])
+        with patch("rac_generator.project_ui.filedialog.askopenfilenames", return_value=(str(first), str(second))):
+            self.assertTrue(self.app.import_schedules())
+        self.assertEqual([record.equipment_name for record in self.app.records], [original[0].equipment_name, "AHU-01", "AHU-02"])
 
 
 if __name__ == "__main__":
