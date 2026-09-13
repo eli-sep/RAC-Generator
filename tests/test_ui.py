@@ -353,7 +353,7 @@ class UITests(unittest.TestCase):
     def test_imported_identifiers_survive_navigation_edits_and_recalculate(self):
         path = self.directory / "existing.csv"
         record = DeviceRecord(
-            device_name="Existing", equipment_name="VAV-X", room_number="001", fqr="Custom.Path",
+            device_name="Existing", equipment_name="VAV-X", room_number="001", leaf_space="Office", fqr="Custom.Path",
             device_description="Custom description", instance=54321, sa_area=0.375, sa_kfactor=2.77,
             extra_parameters=[ExtraParameter("OTHER", "AV9999", "Default Value", "001")],
         )
