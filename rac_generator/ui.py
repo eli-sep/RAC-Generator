@@ -109,7 +109,7 @@ class RACGeneratorApp(ProjectFilesMixin, tk.Tk):
         ttk.Label(outer, textvariable=self.status_var, anchor="w").pack(fill="x", pady=(8, 0))
 
     def _labeled_entry(self, parent, label, row, col, variable, width=22, colspan=1):
-        ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", padx=6, pady=(6, 2))
+        ttk.Label(parent, text=label).grid(row=row, column=col, columnspan=colspan, sticky="w", padx=6, pady=(6, 2))
         entry = ttk.Entry(parent, textvariable=variable, width=width)
         entry.grid(row=row + 1, column=col, columnspan=colspan, sticky="ew", padx=6, pady=(0, 8))
         return entry
@@ -221,7 +221,7 @@ class RACGeneratorApp(ProjectFilesMixin, tk.Tk):
         self._labeled_entry(frame, "End", 0, 3, self.end_var, width=8)
         self._labeled_entry(frame, "Digits", 0, 4, self.digits_var, width=8)
         self._labeled_entry(frame, "Starting MAC / IP Ctrl #", 0, 5, self.start_address_var, width=10)
-        self._labeled_entry(frame, "Served By (exact Equipment Name; use && for multiple)", 2, 0, self.served_by_var, colspan=2)
+        self._labeled_entry(frame, "Served By (exact Equipment Name, use && for multiple)", 2, 0, self.served_by_var, colspan=2)
 
         ttk.Label(frame, text="Manufacturer").grid(row=2, column=2, sticky="w", padx=6, pady=(6, 2))
         self.manufacturer_combo = ttk.Combobox(
