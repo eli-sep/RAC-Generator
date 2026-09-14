@@ -1,4 +1,4 @@
-# RAC Generator v0.3
+# RAC Generator v0.3.1
 
 Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedule Template** and reviewed against the SCT Release 18 Rapid Archive workflow.
 
@@ -42,7 +42,7 @@ Python/Tkinter RAC Generator based on the supplied Johnson Controls **RAC Schedu
 
 ## Save your work and resume later
 
-Use **Save Project** while building a database, even if required SCT fields are still blank. The `.rac.json` file stores all device data and editing settings, including manufacturer/inlet selections, group defaults, and equipment already in SCT. Use **Open Project** to pick up where you left off. Projects with only form settings and no generated devices can also be saved.
+Use **Save Project** while building a database, even if required SCT fields are still blank. The `.rac.json` file stores all device data and editing settings, including manufacturer/inlet selections, group defaults, and equipment already in SCT. Use **Open Project** to pick up where you left off. Projects with only form settings and no generated devices can also be saved. Project filenames ending in `.json` are also supported.
 
 | Action | File | What it does |
 | --- | --- | --- |

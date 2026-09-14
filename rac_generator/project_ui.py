@@ -9,6 +9,12 @@ from .importers import import_rac_schedule
 from .project_io import FORM_FIELDS, load_project, save_project
 
 
+# Older macOS Tk 8.6 builds abort when a compound extension such as
+# "rac.json" cannot be converted to a UTType. Filter by the final suffix;
+# the suggested filename can still be "RAC_Project.rac.json".
+PROJECT_FILE_TYPES = [("RAC Generator Project", "*.json")]
+
+
 class ProjectFilesMixin:
     """Project persistence and schedule import for the Tk application."""
 
@@ -134,7 +140,7 @@ class ProjectFilesMixin:
             return False
         path = filedialog.askopenfilename(
             parent=self, title="Open RAC Generator Project",
-            filetypes=[("RAC Generator Project", "*.rac.json"), ("JSON files", "*.json")],
+            filetypes=PROJECT_FILE_TYPES,
         )
         if not path:
             return False
@@ -162,8 +168,8 @@ class ProjectFilesMixin:
         path = self.project_path
         if save_as or path is None:
             chosen = filedialog.asksaveasfilename(
-                parent=self, title="Save RAC Generator Project", defaultextension=".rac.json",
-                filetypes=[("RAC Generator Project", "*.rac.json")],
+                parent=self, title="Save RAC Generator Project", defaultextension=".json",
+                filetypes=PROJECT_FILE_TYPES,
                 initialfile=path.name if path else "RAC_Project.rac.json",
             )
             if not chosen:

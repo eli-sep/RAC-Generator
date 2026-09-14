@@ -3,6 +3,7 @@ import sys
 import tempfile
 import tkinter as tk
 import unittest
+from fnmatch import fnmatch
 from pathlib import Path
 from tkinter import ttk
 from unittest.mock import patch
@@ -257,9 +258,34 @@ class UITests(unittest.TestCase):
         self.assertFalse(self.app._dirty)
         self.assertNotIn(" *", self.app.title())
 
+    def test_project_dialogs_use_native_safe_extensions_and_keep_selected_paths(self):
+        path = self.directory / "RAC_Project.rac.json"
+        self.app.site_var.set("Saved site")
+
+        def choose_project(**options):
+            # macOS converts each filter/default extension into a UTType.
+            # A compound extension can produce nil and abort older Tk builds.
+            for _label, pattern in options["filetypes"]:
+                self.assertNotIn(".", pattern.removeprefix("*."))
+                self.assertTrue(fnmatch(path.name, pattern))
+            if "defaultextension" in options:
+                self.assertEqual(options["defaultextension"], ".json")
+                self.assertEqual(options["initialfile"], "RAC_Project.rac.json")
+            return str(path)
+
+        with patch("rac_generator.project_ui.filedialog.asksaveasfilename", side_effect=choose_project):
+            self.assertTrue(self.app.save_project())
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.app.project_path, path)
+        self.app.site_var.set("Unsaved site")
+        with patch("rac_generator.project_ui.filedialog.askopenfilename", side_effect=choose_project), \
+             patch("rac_generator.project_ui.messagebox.askyesnocancel", return_value=False):
+            self.assertTrue(self.app.open_project())
+        self.assertEqual(self.app.site_var.get(), "Saved site")
+
     def test_form_only_project_and_save_as_keep_both_files(self):
         first = self.directory / "first.rac.json"
-        second = self.directory / "second.rac.json"
+        second = self.directory / "second.json"
         self.app.engine_var.set("SNE03")
         with patch("rac_generator.project_ui.filedialog.asksaveasfilename", return_value=str(first)):
             self.assertTrue(self.app.save_project())
